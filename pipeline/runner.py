@@ -173,6 +173,8 @@ class TradingPipeline:
         
         # We need the feature column names to feed the dataset (exclude metadata/weights)
         feature_cols = self.feature_eng.features_list
+        print(len(feature_cols))
+        print(feature_cols)
         seq_len = self.config['predictor']['seq_len']
         batch_size = 64
         
