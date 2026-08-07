@@ -172,8 +172,7 @@ class TradingPipeline:
         from torch.utils.data import DataLoader
         
         # We need the feature column names to feed the dataset (exclude metadata/weights)
-        exclude_cols = ['ticker', 'date', 'cluster_id', 'local_id', 'weight']
-        feature_cols = [c for c in feature_datasets['train'].columns if c not in exclude_cols]
+        feature_cols = self.feature_eng.features_list
         seq_len = self.config['predictor']['seq_len']
         batch_size = 64
         
