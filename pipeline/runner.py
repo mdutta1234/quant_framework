@@ -31,18 +31,23 @@ class TradingPipeline:
         
         # Filter all datasets to ONLY include stocks that made it into a cluster
         selected_tickers = list(cluster_mapping.keys())
+        local_id_mapping = {}
+        for c_id in set(cluster_mapping.values()):
+            c_tickers = [t for t, cid in cluster_mapping.items() if cid == c_id]
+            for local_idx, t in enumerate(c_tickers):
+                local_id_mapping[t] = local_idx
+
         for split_name in feature_datasets.keys():
             df = feature_datasets[split_name]
             df = df[df['ticker'].isin(selected_tickers)].copy()
             
-            # Inject the cluster_id into the dataframe
+            # Inject the cluster_id AND local_id into the dataframe
             df['cluster_id'] = df['ticker'].map(cluster_mapping)
+            df['local_id'] = df['ticker'].map(local_id_mapping) # <--- INJECTED HERE
             feature_datasets[split_name] = df
             
         num_clusters = len(set(cluster_mapping.values()))
         print(f"\n[*] Universe reduced to {len(selected_tickers)} highly correlated/liquid stocks across {num_clusters} clusters.")
-        
-        # Phase 2 Dynamic Config Injection setup
         # ==========================================
         # STAGE 5: Mathematical Consensus Prior
         # ==========================================
@@ -138,5 +143,84 @@ class TradingPipeline:
             assert dummy_out.shape == (32, input_dim), "Model output shape mismatch!"
             
         print("\n[*] All cluster-specific Neural Networks successfully built and shape-tested!")
+        
+        # ==========================================
+        # STAGE 14: Loss Function Initialization
+        # ==========================================
+        print("\n--- STAGE 8: Custom Weighted Loss Function ---")
+        
+        self.loss_fn = ModuleFactory.get_loss(self.config['loss_function'])
+        print(f"  -> Initialized: {self.config['loss_function']['type']}")
+        
+        # --- PYTORCH LOSS TEST ---
+        import torch
+        
+        dummy_preds = torch.tensor([[1.5, -0.5], [2.0, 1.0]], dtype=torch.float32)
+        dummy_targets = torch.tensor([[1.0, 0.0], [2.0, 1.0]], dtype=torch.float32)
+        
+        # Row 1 has high confidence (1.0), Row 2 has low confidence (0.1)
+        dummy_weights = torch.tensor([1.0, 0.1], dtype=torch.float32) 
+        
+        loss_val = self.loss_fn(dummy_preds, dummy_targets, dummy_weights)
+        print(f"  -> Test Loss Evaluation Successful! Computed Loss: {loss_val.item():.4f}")
+
+        # ==========================================
+        # STAGE 15: PyTorch DataLoaders
+        # ==========================================
+        print("\n--- STAGE 15: Building PyTorch DataLoaders ---")
+        from utils.dataset import QuantTimeSeriesDataset
+        from torch.utils.data import DataLoader
+        
+        # We need the feature column names to feed the dataset (exclude metadata/weights)
+        exclude_cols = ['ticker', 'date', 'cluster_id', 'weight']
+        feature_cols = [c for c in feature_datasets['train'].columns if c not in exclude_cols]
+        seq_len = self.config['predictor']['seq_len']
+        batch_size = 64
+        
+        self.dataloaders = {}
+        
+        for split_name, df in feature_datasets.items():
+            print(f"\nProcessing {split_name.upper()} split...")
+            
+            # Create Dataset
+            dataset = QuantTimeSeriesDataset(df, seq_len=seq_len, feature_cols=feature_cols)
+            
+            # Create DataLoader (Shuffle only the training set)
+            shuffle = True if split_name == 'train' else False
+            
+            self.dataloaders[split_name] = DataLoader(
+                dataset, 
+                batch_size=batch_size, 
+                shuffle=shuffle,
+                num_workers=0, # Set to >0 if running on a heavy machine
+                drop_last=True
+            )
+            
+        # --- PYTORCH BATCH TEST ---
+        print("\n[DATALOADER CHECK]")
+        # Grab exactly 1 batch of training data
+        batch_x, batch_id, batch_cid, batch_y, batch_w = next(iter(self.dataloaders['train']))
+        
+        print(f"Historical X shape : {batch_x.shape} (batch, seq_len, features)")
+        print(f"Local ID shape     : {batch_id.shape} (batch)")
+        print(f"Cluster ID shape   : {batch_cid.shape} (batch)")
+        print(f"Target Y shape     : {batch_y.shape} (batch, features)")
+        print(f"Weight W shape     : {batch_w.shape} (batch)")
+        
+        print("\n[*] Data perfectly formatted for the PyTorch Training Loop!")
+
+        # ==========================================
+        # STAGE 16: Multi-Model Training
+        # ==========================================
+        from utils.trainer import MultiClusterTrainer
+        
+        trainer = MultiClusterTrainer(
+            models=self.predictors,
+            dataloaders=self.dataloaders,
+            loss_fn=self.loss_fn,
+            config=self.config
+        )
+        
+        trainer.train()
         
         return feature_datasets

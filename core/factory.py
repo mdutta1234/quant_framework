@@ -9,6 +9,8 @@ from modules.priors.time_decay_prior import TimeDecayEnsemblePrior
 from modules.weights.huber_weights import HuberWeightGenerator 
 from modules.weights.equal_weights import EqualWeightGenerator 
 from modules.predictors.lstm_cnn_mlp import LSTM_CNN_MLP
+from modules.loss.weighted_huber import WeightedHuberLoss 
+from modules.loss.weighted_mse import WeightedMSELoss
 
 class ModuleFactory:
     @staticmethod
@@ -71,7 +73,13 @@ class ModuleFactory:
         raise ValueError(f"Unknown Predictor Model: {pred_type}")
     
     @staticmethod
-    def get_loss(config): pass
+    def get_loss(config: dict):
+        ltype = config.get('type')
+        if ltype == "WeightedHuberLoss":
+            return WeightedHuberLoss(config)
+        elif ltype == "WeightedMSELoss":
+            return WeightedMSELoss(config)
+        raise ValueError(f"Unknown Loss Function: {ltype}")
     
     @staticmethod
     def get_rl_agent(config): pass

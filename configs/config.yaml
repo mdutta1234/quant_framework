@@ -127,17 +127,18 @@ weight_generator:
 # configs/config.yaml (Add below weight_generator)
 predictor:
   type: "lstm_cnn_mlp"
-  use_embedding: false     # False = One-Hot Encoding, True = Learned Embedding
-  embedding_dim: 8         # Only used if use_embedding is true
-  seq_len: 20              # Number of historical days passed to the model
-  
-  # LSTM configuration
+  use_embedding: false
+  embedding_dim: 8
+  seq_len: 20
   lstm_hidden: 64
   lstm_layers: 1
-  
-  # CNN configuration
   cnn_channels: 32
   cnn_kernel: 3
-  
-  # MLP configuration (List allows dynamic number of layers)
   mlp_hidden: [64, 32]
+  epochs: 25
+  learning_rate: 0.001
+  batch_size: 64
+
+loss_function:
+  type: "WeightedHuberLoss"
+  delta: 1.0     # The threshold where it switches from MSE (L2) to MAE (L1)
