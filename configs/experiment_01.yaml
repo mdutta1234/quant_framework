@@ -1,0 +1,56 @@
+experiment_name: "V1_GBM_LSTM_PPO"
+data_path: "./data/raw_market_data.csv" # To be downloaded later
+
+universe_selector:
+  type: "YFinance"
+  tickers: ["AAPL", "MSFT", "GOOGL", "AMZN", "NVDA"]
+  start_date: "2015-01-01"
+  end_date: "2025-01-01"
+  
+feature_engineer:
+  selected_features: 
+    - "open"
+    - "high"
+    - "low"
+    - "close"
+    - "volume"
+    - "rsi_14"
+    - "macd"
+    - "rolling_vol_20"
+  fill_na_method: "forward_fill"
+
+cluster_selector:
+  method: "hierarchical"
+  distance_metric: "correlation"
+  target_clusters: 5
+  max_stocks_per_cluster: 5
+
+prior_model:
+  type: "GBM"
+  sliding_window: 100
+
+weight_generator:
+  type: "HuberResidual"
+  delta: 1.0
+
+predictor:
+  type: "LSTM_CNN_MLP"
+  lstm_hidden: 64
+  cnn_out_channels: 32
+  mlp_hidden: 128
+  learning_rate: 0.001
+
+loss_function:
+  type: "WeightedHuber"
+
+rl_algorithm:
+  type: "PPO"
+  portfolio_dim: 3 # Cash, Holdings, Portfolio Value
+  learning_rate: 0.0003
+  gamma: 0.99
+
+evaluation:
+  metrics:
+    - "Sharpe_Ratio"
+    - "Max_Drawdown"
+    - "Win_Rate"
