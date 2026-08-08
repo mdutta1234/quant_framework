@@ -1,0 +1,3 @@
+# Prepare a document in which we repeat this experiment over a number of stocks, chosen randomly , a number of times, and we have a table , where rows tell us the 
+# the metric averaged (averaged over all stocks for a give slot, and in all the number of random stock selection) and column tell us the alpha values
+# Have this document for various predictor models, and mathmatical priors, and descriptors and cluster selector and over different years of train,test,validate, and over different stock universes etc

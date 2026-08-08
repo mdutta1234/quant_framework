@@ -13,7 +13,17 @@ class MultiClusterTrainer:
         self.lr = pred_config.get('learning_rate', 0.001)
         
         # Automatically use GPU if available
-        self.device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
+        if torch.cuda.is_available():
+            major, minor = torch.cuda.get_device_capability()
+            # If the GPU is older than CC 7.5 (like the MX350), fallback to CPU
+            if major < 7 or (major == 7 and minor < 5):
+                print(f"[WARNING] GPU Compute Capability {major}.{minor} detected.")
+                print(f"[WARNING] Modern PyTorch requires >= 7.5. Falling back to CPU for local testing.")
+                self.device = torch.device('cpu')
+            else:
+                self.device = torch.device('cuda')
+        else:
+            self.device = torch.device('cpu')
         
         # Setup independent optimizers for each cluster's model
         self.optimizers = {

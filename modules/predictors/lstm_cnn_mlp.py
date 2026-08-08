@@ -10,6 +10,9 @@ class LSTM_CNN_MLP(BasePredictor):
         
         self.use_embedding = config.get('use_embedding', False)
         
+        # ---> EXTRACT DROPOUT FROM CONFIG (Default: 20%) <---
+        dropout_rate = config.get('dropout', 0.2)
+        
         # 1. Handle Stock Identifier Dimension
         if self.use_embedding:
             self.emb_dim = config.get('embedding_dim', 8)
@@ -28,6 +31,9 @@ class LSTM_CNN_MLP(BasePredictor):
             num_layers=lstm_layers, 
             batch_first=True
         )
+        
+        # ---> INITIALIZE DROPOUT MODULE <---
+        self.dropout = nn.Dropout(dropout_rate)
         
         # 3. CNN Block (1D Convolution over the time axis of LSTM outputs)
         cnn_channels = config.get('cnn_channels', 32)
@@ -49,6 +55,7 @@ class LSTM_CNN_MLP(BasePredictor):
         for hidden_size in mlp_hidden_layers:
             mlp_layers.append(nn.Linear(in_features, hidden_size))
             mlp_layers.append(nn.ReLU())
+            mlp_layers.append(nn.Dropout(dropout_rate)) # ---> ADD DROPOUT AFTER ACTIVATION <---
             in_features = hidden_size
             
         # Final output layer predicting the future feature vector
@@ -74,6 +81,9 @@ class LSTM_CNN_MLP(BasePredictor):
         # LSTM Pass
         lstm_out, _ = self.lstm(combined_x) # (batch, seq_len, lstm_hidden)
         
+        # ---> APPLY DROPOUT TO LSTM OUTPUT <---
+        lstm_out = self.dropout(lstm_out)
+        
         # CNN Pass (PyTorch Conv1d expects [batch, channels, seq_len])
         cnn_in = lstm_out.transpose(1, 2)
         cnn_out = self.conv1d(cnn_in)
@@ -81,6 +91,9 @@ class LSTM_CNN_MLP(BasePredictor):
         
         # Pool across remaining time dimension & flatten
         pooled = self.pool(cnn_out).squeeze(-1) # (batch, cnn_channels)
+        
+        # ---> APPLY DROPOUT TO POOLED CNN FEATURES <---
+        pooled = self.dropout(pooled)
         
         # MLP Pass
         predictions = self.mlp(pooled) # (batch, output_dim)

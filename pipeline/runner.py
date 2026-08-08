@@ -1,6 +1,14 @@
 import os
+import sys
 import pandas as pd
+from sklearn.preprocessing import StandardScaler
 from core.factory import ModuleFactory
+import torch
+import numpy as np
+import matplotlib.pyplot as plt
+from utils.rl_helper import generate_predictor_outputs            
+from modules.environment.trading_env import MultiAssetTradingEnv
+
 
 class TradingPipeline:
     def __init__(self, config: dict):
@@ -163,7 +171,29 @@ class TradingPipeline:
         
         loss_val = self.loss_fn(dummy_preds, dummy_targets, dummy_weights)
         print(f"  -> Test Loss Evaluation Successful! Computed Loss: {loss_val.item():.4f}")
-
+        
+        # ==========================================
+        # STAGE 14.5: Feature Scaling
+        # ==========================================
+        
+        print("\n--- STAGE 14.5: Feature Scaling (Z-Score Normalization) ---")
+        from sklearn.preprocessing import StandardScaler
+        
+        feature_cols = self.feature_eng.features_list
+        self.scaler = StandardScaler()
+        
+        # ---> THE FIX: Cast all features to float to prevent integer override errors <---
+        for split_name in feature_datasets.keys():
+            feature_datasets[split_name][feature_cols] = feature_datasets[split_name][feature_cols].astype(float)
+        
+        # 1. Fit ONLY on the training split to prevent look-ahead bias
+        self.scaler.fit(feature_datasets['train'][feature_cols])
+        
+        # 2. Transform Train, Val, and Test
+        for split_name, df in feature_datasets.items():
+            feature_datasets[split_name].loc[:, feature_cols] = self.scaler.transform(df[feature_cols])
+            
+        print("  -> Features successfully scaled to Mean=0, Std=1")
         # ==========================================
         # STAGE 15: PyTorch DataLoaders
         # ==========================================
@@ -224,4 +254,164 @@ class TradingPipeline:
         
         trainer.train()
         
+        # ==========================================
+        # STAGE 17: Inference Plotting & Export
+        # ==========================================
+        print("\n--- STAGE 17: Inference Plotting (Actual vs Predicted) ---")
+
+        output_dir = "./main_py_results"
+        os.makedirs(output_dir, exist_ok=True)
+
+        feature_cols = self.feature_eng.features_list
+        ohclv_cols = [c for c in ['open', 'high', 'low', 'close', 'volume'] if c in feature_cols]
+        ohclv_indices = [feature_cols.index(c) for c in ohclv_cols]
+
+        # Select 1 representative stock from each cluster
+        sample_tickers = []
+        for c_id in range(num_clusters):
+            c_tickers = [t for t, cid in cluster_mapping.items() if cid == c_id]
+            if c_tickers:
+                sample_tickers.append(c_tickers[0])
+
+        test_df = feature_datasets['test']
+
+        for ticker in sample_tickers:
+            t_data = test_df[test_df['ticker'] == ticker]
+            if len(t_data) <= seq_len:
+                continue
+
+            features = t_data[feature_cols].values.astype(np.float32)
+            local_id = t_data['local_id'].values[0]
+            cluster_id = t_data['cluster_id'].values[0]
+
+            model = self.predictors[cluster_id]
+            model.eval()
+
+            y_true_list, y_pred_list = [], []
+
+            with torch.no_grad():
+                for i in range(len(features) - seq_len):
+                    x_win = torch.tensor(features[i : i + seq_len]).unsqueeze(0).to(trainer.device)
+                    id_tens = torch.tensor([local_id]).to(trainer.device)
+
+                    pred = model(x_win, id_tens).cpu().numpy()[0]
+                    y_pred_list.append(pred)
+                    y_true_list.append(features[i + seq_len])
+
+            y_pred_scaled = np.array(y_pred_list)
+            y_true_scaled = np.array(y_true_list)
+
+            # Reverse Z-score normalization
+            y_pred_real = self.scaler.inverse_transform(y_pred_scaled)
+            y_true_real = self.scaler.inverse_transform(y_true_scaled)
+
+            # Generate individual OHCLV plots for this stock
+            stock_dir = os.path.join(output_dir, f"cluster_{cluster_id}_{ticker}")
+            os.makedirs(stock_dir, exist_ok=True)
+
+            for col_name, idx in zip(ohclv_cols, ohclv_indices):
+                plt.figure(figsize=(12, 6))
+                plt.plot(y_true_real[:, idx], label='Actual', color='black', alpha=0.8)
+                plt.plot(y_pred_real[:, idx], label='Predicted', color='crimson', alpha=0.7, linestyle='--')
+                plt.title(f"Test Split Inference: {ticker} (Cluster {cluster_id}) - {col_name.upper()}")
+                plt.xlabel("Test Sequence Step (Days)")
+                plt.ylabel("Real Unscaled Value")
+                plt.legend()
+                plt.grid(True, alpha=0.3)
+                plt.tight_layout()
+                plt.savefig(os.path.join(stock_dir, f"{col_name}.png"))
+                plt.close()
+
+            print(f"  -> Saved test inference plots for {ticker} (Cluster {cluster_id}) to {stock_dir}/")
+
+        print(f"\n[*] All pipeline results saved to '{output_dir}/'.")
+        # ==========================================
+        # STAGE 18: RL Environment Benchmarks
+        # ==========================================
+        print("\n--- STAGE 18: RL Environment Benchmark Strategies ---")
+        
+        # 1. Synthesize Predictions for the RL Env
+        predictions_dict = generate_predictor_outputs(
+            models=self.predictors,
+            feature_datasets=feature_datasets,
+            scaler=self.scaler,
+            config=self.config
+        )
+        
+        test_df = feature_datasets['test']
+        test_preds = predictions_dict['test']
+        
+        # 2. Instantiate Gymnasium Environment
+        env = MultiAssetTradingEnv(df=test_df, predictions_df=test_preds, config=self.config)
+        
+        # 3. Execute Benchmark Strategies
+        eq_returns = self._run_equal_weight_strategy(env)
+        pred_returns = self._run_predictor_only_strategy(env)
+        
+        # 4. Plot Comparison
+        plt.figure(figsize=(12, 6))
+        plt.plot(eq_returns, label="Equal-Weight Baseline", color="black", linestyle="--")
+        plt.plot(pred_returns, label="Predictor-Only Strategy", color="blue", linewidth=2)
+        plt.title("Stage 18: Portfolio Value Backtest (Test Set)")
+        plt.xlabel("Trading Days")
+        plt.ylabel("Portfolio Value ($)")
+        plt.legend()
+        plt.grid(True, alpha=0.3)
+        plt.tight_layout()
+        
+        rl_plot_path = os.path.join(output_dir, "RL_Environment_Backtest.png")
+        plt.savefig(rl_plot_path)
+        plt.close()
+        
+        print(f"  -> Saved RL backtest plot to {rl_plot_path}")
+        print(f"\n[*] ALL STAGES COMPLETE. Pipeline results are in '{output_dir}/'.")
+
         return feature_datasets
+    
+    # ---------------------------------------------------------
+    # RL BENCHMARK HELPER METHODS
+    # ---------------------------------------------------------
+    def _run_equal_weight_strategy(self, env):
+        obs, info = env.reset()
+        done = False
+        num_assets = env.num_assets
+        action = np.ones(num_assets, dtype=np.float32) / num_assets
+        
+        values = [env.initial_cash]
+        while not done:
+            obs, reward, terminated, truncated, info = env.step(action)
+            values.append(info['portfolio_value'])
+            done = terminated or truncated
+        return values
+
+    def _run_predictor_only_strategy(self, env):
+        obs, info = env.reset()
+        done = False
+        num_assets = env.num_assets
+        
+        values = [env.initial_cash]
+        while not done:
+            # Extract predicted returns from the state observation.
+            # Using the exact dimensional sizes calculated by the environment
+            pred_returns = []
+            for i in range(num_assets):
+                idx = i * env.per_stock_dim + len(env.market_feature_cols)
+                pred_returns.append(obs[idx])
+            
+            # Allocate proportionally to positive predicted returns
+            pos_preds = np.maximum(0.0, pred_returns)
+            p_sum = np.sum(pos_preds)
+            
+            if p_sum > 0:
+                action = pos_preds / p_sum
+            else:
+                action = np.zeros(num_assets, dtype=np.float32)
+                
+            obs, reward, terminated, truncated, info = env.step(action)
+            values.append(info['portfolio_value'])
+            done = terminated or truncated
+        return values
+
+# Prepare a document in which we repeat this experiment over a number of stocks, chosen randomly , a number of times, and we have a table , where rows tell us the 
+# the metric averaged (averaged over all stocks for a give slot, and in all the number of random stock selection) and column tell us the alpha values
+# Have this document for various predictor models, and mathmatical priors, and descriptors and cluster selector and over different years of train,test,validate, and over different stock universes etc

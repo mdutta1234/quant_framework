@@ -120,7 +120,7 @@ prior_model:
 
 weight_generator:
   type: "HuberWeightGenerator"
-  alpha: 0.5            # 0 = Ignore Prior (all weights=1), >0 = Penalize anomalies
+  alpha: 30            # 0 = Ignore Prior (all weights=1), >0 = Penalize anomalies
   delta: 1.0            # Huber transition point
   min_weight: 0.1       # Don't let weights drop below this (prevents dead gradients)
 
@@ -130,15 +130,142 @@ predictor:
   use_embedding: false
   embedding_dim: 8
   seq_len: 20
+  dropout: 0
   lstm_hidden: 64
   lstm_layers: 1
   cnn_channels: 32
   cnn_kernel: 3
   mlp_hidden: [64, 32]
-  epochs: 25
+  epochs: 55
   learning_rate: 0.001
   batch_size: 64
 
 loss_function:
   type: "WeightedHuberLoss"
   delta: 1.0     # The threshold where it switches from MSE (L2) to MAE (L1)
+
+
+rl_environment:
+  # ============================================================
+  # ENVIRONMENT / EXECUTION
+  # ============================================================
+  initial_cash: 100000.0
+  transaction_cost_pct: 0.0010      # 10 bps
+  slippage_pct: 0.0005              # 5 bps
+
+  max_stock_weight: 0.40            # Max 40% per stock
+  min_stock_weight: 0.00            # Long-only V1
+  max_total_exposure: 1.00          # Fully invested at most
+  allow_cash: true
+
+  # ============================================================
+  # PER-STOCK RL STATE FEATURES
+  # ============================================================
+  market_features:
+    # 1. PREDICTOR-DERIVED FEATURES
+    - "predicted_return"
+    - "prediction_residual"
+    - "normalized_residual"
+    - "prediction_confidence"
+    - "predicted_return_volatility_ratio"
+    - "recent_prediction_error"
+    - "prediction_direction"
+    - "prediction_error_volatility"
+
+    # 2. PRICE / MOMENTUM FEATURES
+    - "return_1d"
+    - "return_5d"
+    - "return_20d"
+    - "return_60d"
+    - "distance_from_ma20"
+    - "distance_from_ma50"
+    - "distance_from_ma200"
+    - "rsi_14"
+    - "macd"
+    - "macd_signal"
+
+    # 3. VOLATILITY / RISK FEATURES
+    - "rolling_std_20"
+    - "rolling_std_60"
+    - "downside_volatility_20"
+    - "atr_14"
+    - "rolling_sharpe_20"
+    - "rolling_sharpe_60"
+    - "max_drawdown_60"
+
+    # 4. VOLUME / LIQUIDITY FEATURES
+    - "volume_ratio_20"
+    - "volume_ratio_60"
+    - "volume_volatility_20"
+
+    # 5. MARKET-RELATIVE FEATURES
+    - "market_relative_return_5d"
+    - "market_relative_return_20d"
+    - "market_beta_60"
+    - "market_correlation_60"
+
+    # 6. POSITION FEATURES
+    - "portfolio_weight"
+    - "previous_portfolio_weight"
+    - "unrealized_pnl"
+    - "holding_duration"
+
+  # ============================================================
+  # STOCK IDENTIFICATION
+  # ============================================================
+  stock_identifier:
+    enabled: true
+    encoding: "one_hot"
+
+  # ============================================================
+  # PORTFOLIO-LEVEL STATE FEATURES
+  # ============================================================
+  portfolio_features:
+    - "cash_ratio"
+    - "portfolio_return_1d"
+    - "portfolio_return_5d"
+    - "portfolio_return_20d"
+    - "portfolio_volatility_20"
+    - "portfolio_volatility_60"
+    - "portfolio_sharpe_20"
+    - "portfolio_sharpe_60"
+    - "portfolio_max_drawdown"
+    - "current_drawdown"
+    - "total_exposure"
+    - "portfolio_turnover"
+    - "number_of_positions"
+    - "largest_position_weight"
+
+  # ============================================================
+  # REWARD CONFIGURATION (V1 Baseline)
+  # ============================================================
+  reward_config:
+    # RETURN
+    return_reward_lambda: 1.00
+    log_return_reward_lambda: 1.00
+
+    # RISK PENALTIES
+    volatility_penalty_lambda: 0.10
+    downside_volatility_penalty_lambda: 0.10
+    var_penalty_lambda: 0.05
+    cvar_penalty_lambda: 0.05
+
+    # DRAWDOWN PENALTIES
+    drawdown_penalty_lambda: 0.20
+    severe_drawdown_penalty_lambda: 0.40
+    drawdown_threshold: 0.05
+    severe_drawdown_threshold: 0.10
+
+    # TRANSACTION / TRADING PENALTIES
+    transaction_cost_lambda: 1.00
+    slippage_lambda: 1.00
+    turnover_penalty_lambda: 0.05
+
+    # CONCENTRATION / EXPOSURE
+    concentration_penalty_lambda: 0.05
+    excessive_exposure_penalty_lambda: 0.10
+    target_exposure: 1.00
+
+    # REWARD NORMALIZATION
+    normalize_reward: true
+    reward_clip: 10.0
