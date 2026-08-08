@@ -242,35 +242,35 @@ rl_environment:
   reward_config:
     # RETURN
     return_reward_lambda: 1.00
-    log_return_reward_lambda: 1.00
+    log_return_reward_lambda: 5.00
 
     # RISK PENALTIES
-    volatility_penalty_lambda: 0.10
-    downside_volatility_penalty_lambda: 0.10
-    var_penalty_lambda: 0.05
-    cvar_penalty_lambda: 0.05
+    volatility_penalty_lambda: 0.010
+    downside_volatility_penalty_lambda: 0.010
+    var_penalty_lambda: 0
+    cvar_penalty_lambda: 0
 
     # DRAWDOWN PENALTIES
-    drawdown_penalty_lambda: 0.20
-    severe_drawdown_penalty_lambda: 0.40
+    drawdown_penalty_lambda: 0.050
+    severe_drawdown_penalty_lambda: 0.10
     drawdown_threshold: 0.05
     severe_drawdown_threshold: 0.10
 
     # TRANSACTION / TRADING PENALTIES
-    transaction_cost_lambda: 1.00
-    slippage_lambda: 1.00
-    turnover_penalty_lambda: 0.05
+    transaction_cost_lambda: 0.50
+    slippage_lambda: 0.50
+    turnover_penalty_lambda: 0.00
 
     # CONCENTRATION / EXPOSURE
-    concentration_penalty_lambda: 0.05
-    excessive_exposure_penalty_lambda: 0.10
+    concentration_penalty_lambda: 0.00
+    excessive_exposure_penalty_lambda: 0.00
     target_exposure: 1.00
 
     # REWARD NORMALIZATION
     normalize_reward: true
     reward_clip: 10.0
 
-# ============================================================
+  # ============================================================
   # RL AGENT HYPERPARAMETERS (V1)
   # ============================================================
   rl_agent:
@@ -283,7 +283,7 @@ rl_environment:
     gamma: 0.99
     gae_lambda: 0.95
     clip_range: 0.2
-    ent_coef: 0.01
+    ent_coef: 0.05             # <-- INCREASED: Forces more exploration
     vf_coef: 0.5
     max_grad_norm: 0.5
-    total_timesteps: 50000
+    total_timesteps: 250000    # <-- INCREASED: 50k is too short to learn past the initial cost barrier
