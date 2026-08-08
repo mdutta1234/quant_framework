@@ -1,0 +1,289 @@
+# configs/config.yaml (Add this at the top of the file)
+experiment_name: "V1_GBM_LSTM_PPO"
+
+pipeline_settings:
+  save_features_to_csv: true
+  processed_data_dir: "./data/processed"
+
+universe_selector:
+  type: "YFinance"
+  #tickers: ["AAPL","MSFT","GOOGL","AMZN","META","NVDA","AVGO","ORCL","CSCO","IBM","ADBE","CRM","QCOM","TXN","INTC","AMD","AMAT","MU","INTU","NOW","JPM","BAC","WFC","C","GS","MS","BLK","SCHW","AXP","USB","JNJ","PFE","MRK","ABBV","LLY","BMY","AMGN","GILD","MDT","SYK","XOM","CVX","COP","SLB","EOG","MPC","PSX","OXY","VLO","HAL","WMT","COST","HD","LOW","TGT","TJX","MCD","SBUX","NKE","KO","PEP","PM","MO","CL","PG","KMB","EL","MDLZ","GIS","KHC","CAT","DE","HON","GE","RTX","BA","LMT","UPS","UNP","CSX","MMM","ETN","EMR","ITW","PH","GD","NOC","WM","FDX","PCAR","AMT","PLD","CCI","EQIX","SPG","O","DLR","VICI","PSA","WELL"]
+  tickers: ["AAPL","MSFT","GOOGL","AMZN","META"]
+  splits:
+    train:
+      start: "2015-01-01"
+      end: "2020-12-31"
+    val:
+      start: "2021-01-01"
+      end: "2022-12-31"
+    test:
+      start: "2023-01-01"
+      end: "2024-12-31"
+
+data_cleaner:
+  type: "StandardCleaner"
+  fill_method: "ffill"
+
+# configs/config.yaml (snippet)
+feature_engineer:
+  type: "HybridFeatureEngineer"
+  selected_features:
+    # 1. Raw Market
+    - "open"
+    - "high"
+    - "low"
+    - "close"
+    - "volume"
+    # 2. Price
+    - "log_return"
+    - "high_low_pct"
+    - "open_close_pct"
+    - "gap_pct"
+    # 3. Trend
+    - "sma_10"
+    - "sma_20"
+    - "ema_20"
+    - "dist_sma_20"
+    - "sma_20_50_cross"
+    # 4. Volatility
+    - "rolling_std_20"
+    - "atr_14"
+    - "parkinson_vol_20"
+    - "bb_width_20"
+    # 5. Momentum
+    - "rsi_14"
+    - "macd"
+    - "macd_hist"
+    - "momentum_10"
+    # 6. Volume
+    - "vol_ma_ratio_20"
+    - "obv"
+    # 7. Statistical
+    - "skewness_20"
+    - "kurtosis_20"
+    - "hurst_proxy_20"
+    - "autocorr_lag1_20"
+    # 8. Market Context
+    - "market_return"
+    - "rolling_beta_20"
+
+cluster_selector:
+  type: "RandomClusterer"
+  random_seed: 42
+  constraints:
+    min_size: 1
+    max_size: 1
+    target_clusters: 5
+  descriptors:
+    # A. Return Distribution
+    - "mean_daily_return"
+    - "median_daily_return"
+    - "return_std"
+    - "return_var"
+    - "return_skewness"
+    - "return_kurtosis"
+    - "max_daily_return"
+    - "min_daily_return"
+    # B. Trend Characteristics
+    - "mean_sma20_dist"
+    - "mean_ema20_dist"
+    - "pct_days_above_sma20"
+    - "pct_days_above_sma50"
+    - "mean_momentum_20"
+    # C. Volatility Profile
+    - "historical_volatility"
+    - "rolling_vol_mean"
+    - "rolling_vol_std"
+    - "atr_mean"
+    - "bb_width_mean"
+    # D. Volume Behaviour
+    - "mean_volume"
+    - "volume_std"
+    - "mean_volume_change"
+    - "volume_autocorr"
+    # E. Price Dynamics
+    - "mean_high_low_pct"
+    - "mean_open_close_pct"
+    - "mean_overnight_gap_pct"
+    - "price_autocorr_lag1"
+    - "price_autocorr_lag5"
+    # F. Candlestick Behaviour
+    - "mean_candle_body_ratio"
+    - "mean_upper_shadow_ratio"
+    - "mean_lower_shadow_ratio"
+
+prior_model:
+  type: "TimeDecayEnsemblePrior"
+  window_length: 50      # Days used to calculate the historical drift (mu)
+  ensemble_size: 20      # How many past vantage points to use for the target day
+  decay_type: "polynomial" # Weights like (19^2, 18^2, ... 1^2)
+
+weight_generator:
+  type: "HuberWeightGenerator"
+  alpha: 30            # 0 = Ignore Prior (all weights=1), >0 = Penalize anomalies
+  delta: 1.0            # Huber transition point
+  min_weight: 0.1       # Don't let weights drop below this (prevents dead gradients)
+
+# configs/config.yaml (Add below weight_generator)
+predictor:
+  type: "lstm_cnn_mlp"
+  use_embedding: false
+  embedding_dim: 8
+  seq_len: 20
+  dropout: 0
+  lstm_hidden: 64
+  lstm_layers: 1
+  cnn_channels: 32
+  cnn_kernel: 3
+  mlp_hidden: [64, 32]
+  epochs: 55
+  learning_rate: 0.001
+  batch_size: 64
+
+loss_function:
+  type: "WeightedHuberLoss"
+  delta: 1.0     # The threshold where it switches from MSE (L2) to MAE (L1)
+
+
+rl_environment:
+  # ============================================================
+  # ENVIRONMENT / EXECUTION
+  # ============================================================
+  initial_cash: 100000.0
+  transaction_cost_pct: 0.0010      # 10 bps
+  slippage_pct: 0.0005              # 5 bps
+
+  max_stock_weight: 0.40            # Max 40% per stock
+  min_stock_weight: 0.00            # Long-only V1
+  max_total_exposure: 1.00          # Fully invested at most
+  allow_cash: true
+
+  # ============================================================
+  # PER-STOCK RL STATE FEATURES
+  # ============================================================
+  market_features:
+    # 1. PREDICTOR-DERIVED FEATURES
+    - "predicted_return"
+    - "prediction_residual"
+    - "normalized_residual"
+    - "prediction_confidence"
+    - "predicted_return_volatility_ratio"
+    - "recent_prediction_error"
+    - "prediction_direction"
+    - "prediction_error_volatility"
+
+    # 2. PRICE / MOMENTUM FEATURES
+    - "return_1d"
+    - "return_5d"
+    - "return_20d"
+    - "return_60d"
+    - "distance_from_ma20"
+    - "distance_from_ma50"
+    - "distance_from_ma200"
+    - "rsi_14"
+    - "macd"
+    - "macd_signal"
+
+    # 3. VOLATILITY / RISK FEATURES
+    - "rolling_std_20"
+    - "rolling_std_60"
+    - "downside_volatility_20"
+    - "atr_14"
+    - "rolling_sharpe_20"
+    - "rolling_sharpe_60"
+    - "max_drawdown_60"
+
+    # 4. VOLUME / LIQUIDITY FEATURES
+    - "volume_ratio_20"
+    - "volume_ratio_60"
+    - "volume_volatility_20"
+
+    # 5. MARKET-RELATIVE FEATURES
+    - "market_relative_return_5d"
+    - "market_relative_return_20d"
+    - "market_beta_60"
+    - "market_correlation_60"
+
+    # 6. POSITION FEATURES
+    - "portfolio_weight"
+    - "previous_portfolio_weight"
+    - "unrealized_pnl"
+    - "holding_duration"
+
+  # ============================================================
+  # STOCK IDENTIFICATION
+  # ============================================================
+  stock_identifier:
+    enabled: true
+    encoding: "one_hot"
+
+  # ============================================================
+  # PORTFOLIO-LEVEL STATE FEATURES
+  # ============================================================
+  portfolio_features:
+    - "cash_ratio"
+    - "portfolio_return_1d"
+    - "portfolio_return_5d"
+    - "portfolio_return_20d"
+    - "portfolio_volatility_20"
+    - "portfolio_volatility_60"
+    - "portfolio_sharpe_20"
+    - "portfolio_sharpe_60"
+    - "portfolio_max_drawdown"
+    - "current_drawdown"
+    - "total_exposure"
+    - "portfolio_turnover"
+    - "number_of_positions"
+    - "largest_position_weight"
+
+  # ============================================================
+  # REWARD CONFIGURATION (V1 Baseline)
+  # ============================================================
+  reward_config:
+    # RETURN
+    return_reward_lambda: 1.00
+    log_return_reward_lambda: 5.00
+
+    # RISK PENALTIES
+    volatility_penalty_lambda: 0.010
+    downside_volatility_penalty_lambda: 0.010
+    var_penalty_lambda: 0
+    cvar_penalty_lambda: 0
+
+    # DRAWDOWN PENALTIES
+    drawdown_penalty_lambda: 0.050
+    severe_drawdown_penalty_lambda: 0.10
+    drawdown_threshold: 0.05
+    severe_drawdown_threshold: 0.10
+
+    # TRANSACTION / TRADING PENALTIES
+    transaction_cost_lambda: 0.50
+    slippage_lambda: 0.50
+    turnover_penalty_lambda: 0.00
+
+    # CONCENTRATION / EXPOSURE
+    concentration_penalty_lambda: 0.00
+    excessive_exposure_penalty_lambda: 0.00
+    target_exposure: 1.00
+
+    # REWARD NORMALIZATION
+    normalize_reward: true
+    reward_clip: 10.0
+
+  # ============================================================
+  # RL AGENT HYPERPARAMETERS (V1)
+  # ============================================================
+  rl_agent:
+    algorithm: "PPO"
+    policy: "MlpPolicy"
+    learning_rate: 0.0003
+    n_steps: 2048
+    batch_size: 64
+    n_epochs: 10
+    gamma: 0.99
+    gae_lambda: 0.95
+    clip_range: 0.2
+    ent_coef: 0.05             # <-- INCREASED: Forces more exploration
+    vf_coef: 0.5
+    max_grad_norm: 0.5
+    total_timesteps: 250000    # <-- INCREASED: 50k is too short to learn past the initial cost barrier

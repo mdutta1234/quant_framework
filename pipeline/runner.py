@@ -8,6 +8,7 @@ import numpy as np
 import matplotlib.pyplot as plt
 from utils.rl_helper import generate_predictor_outputs            
 from modules.environment.trading_env import MultiAssetTradingEnv
+from utils.portfolio_metrics import calculate_portfolio_metrics
 
 
 class TradingPipeline:
@@ -446,6 +447,60 @@ class TradingPipeline:
             print(f"  -> Plot saved to {plot_path}")
 
         print(f"\n[*] ALL STAGES COMPLETE. Final results and agents are saved!")
+        
+        c_eq_returns = self._run_equal_weight_strategy(c_test_env)
+            
+        # Run Baseline 2: Predictor-Only (Top Pick)
+        c_pred_returns = self._run_predictor_only_strategy(c_test_env)
+        
+        # Run Model: PPO Agent
+        c_ppo_returns = self._run_ppo_agent(c_test_env, model)
+        
+        # ==========================================
+        # STAGE 23: RESULTS EVALUATION
+        # ==========================================
+        metrics_eq = calculate_portfolio_metrics(c_eq_returns)
+        metrics_pred = calculate_portfolio_metrics(c_pred_returns)
+        metrics_ppo = calculate_portfolio_metrics(c_ppo_returns)
+        
+        print(f"\n[{'='*40}]")
+        print(f" CLUSTER {c_id} OOS PERFORMANCE (TEST SET)")
+        print(f"[{'='*40}]")
+        print(f"{'Metric':<18} | {'Eq-Weight':<10} | {'Pred-Only':<10} | {'PPO Agent':<10}")
+        print("-" * 57)
+        
+        metrics_keys = [
+            ("Final Value", "Final_Value", "${:,.0f}"),
+            ("Total Return", "Total_Return_Pct", "{:.1f}%"),
+            ("CAGR", "CAGR_Pct", "{:.1f}%"),
+            ("Sharpe Ratio", "Sharpe", "{:.2f}"),
+            ("Sortino Ratio", "Sortino", "{:.2f}"),
+            ("Max Drawdown", "Max_Drawdown_Pct", "{:.1f}%"),
+        ]
+        
+        for label, key, fmt in metrics_keys:
+            eq_val = fmt.format(metrics_eq[key])
+            pred_val = fmt.format(metrics_pred[key])
+            ppo_val = fmt.format(metrics_ppo[key])
+            print(f"{label:<18} | {eq_val:<10} | {pred_val:<10} | {ppo_val:<10}")
+        print("-" * 57)
+        
+        # Generate the Stage 23 Plot
+        plt.figure(figsize=(12, 6))
+        plt.plot(c_eq_returns, label=f"Eq-Weight (Sharpe {metrics_eq['Sharpe']:.2f})", color="black", linestyle="--")
+        plt.plot(c_pred_returns, label=f"Pred-Only (Sharpe {metrics_pred['Sharpe']:.2f})", color="blue", alpha=0.6)
+        plt.plot(c_ppo_returns, label=f"PPO Agent (Sharpe {metrics_ppo['Sharpe']:.2f})", color="green", linewidth=2)
+        plt.title(f"Cluster {c_id} Out-Of-Sample Portfolio Performance")
+        plt.xlabel("Trading Days")
+        plt.ylabel("Portfolio Value ($)")
+        plt.legend()
+        plt.grid(True, alpha=0.3)
+        plt.tight_layout()
+        
+        plot_path = os.path.join(output_dir, f"Cluster_{c_id}_Stage23_Results.png")
+        plt.savefig(plot_path)
+        plt.close()
+
         return feature_datasets
     
     # ---------------------------------------------------------
