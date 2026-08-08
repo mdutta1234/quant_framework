@@ -1,4 +1,4 @@
-# modules/environment/trading_env.py
+%%writefile modules/environment/trading_env.py
 import gymnasium as gym
 from gymnasium import spaces
 import numpy as np
@@ -137,8 +137,17 @@ class MultiAssetTradingEnv(gym.Env):
         
         self.current_step += 1
         next_prices = self.price_matrix[self.current_step]
-        new_portfolio_value = max(self.cash + np.sum(self.stock_positions * next_prices), 1e-4)
+        new_portfolio_value = self.cash + np.sum(self.stock_positions * next_prices)
         
+        # ---> THE LOGIC FIX: Check for Bankruptcy immediately! <---
+        if new_portfolio_value <= 0.20 * self.initial_cash: # If we lose 80% of our money
+            self.portfolio_values.append(new_portfolio_value)
+            self.portfolio_returns.append(-1.0)
+            
+            # Hit them with the maximum penalty and end the episode
+            clip_val = self.reward_cfg.get('reward_clip', 10.0)
+            return self._get_observation(), float(-clip_val), True, False, self._get_info()
+            
         step_return = (new_portfolio_value - current_portfolio_value) / current_portfolio_value
         self.portfolio_values.append(new_portfolio_value)
         self.portfolio_returns.append(step_return)
@@ -170,10 +179,9 @@ class MultiAssetTradingEnv(gym.Env):
             clip_val = self.reward_cfg.get('reward_clip', 10.0)
             reward = np.clip(reward * 100, -clip_val, clip_val)
 
-        terminated = bool(new_portfolio_value <= 0.50 * self.initial_cash)
         truncated = bool(self.current_step >= self.total_steps - 2)
         
-        return self._get_observation(), float(reward), terminated, truncated, self._get_info()
+        return self._get_observation(), float(reward), False, truncated, self._get_info()
 
     def _get_observation(self) -> np.ndarray:
         t = self.current_step
@@ -219,10 +227,8 @@ class MultiAssetTradingEnv(gym.Env):
         ], dtype=np.float32)
         
         full_obs = np.concatenate([np.concatenate(per_stock_obs), global_obs])
-        
-        # ---> THE ULTIMATE FIX: Sanitize & Clip Observations <---
         full_obs = np.nan_to_num(full_obs, nan=0.0, posinf=10.0, neginf=-10.0)
-        full_obs = np.clip(full_obs, -20.0, 20.0) # Absolute guarantee PyTorch never sees an exploding value
+        full_obs = np.clip(full_obs, -20.0, 20.0)
         
         return full_obs.astype(np.float32)
 
