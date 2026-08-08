@@ -366,6 +366,86 @@ class TradingPipeline:
         print(f"  -> Saved RL backtest plot to {rl_plot_path}")
         print(f"\n[*] ALL STAGES COMPLETE. Pipeline results are in '{output_dir}/'.")
 
+# ==========================================
+        # STAGE 19: RL Agent Training & Evaluation
+        # ==========================================
+        print("\n--- STAGE 19: RL Agent Training & Evaluation (PPO) ---")
+        from stable_baselines3 import PPO  # Imported here to keep dependencies clean
+        
+        rl_models_dir = "./models/rl"
+        os.makedirs(rl_models_dir, exist_ok=True)
+        
+        rl_cfg = self.config['rl_environment'].get('rl_agent', {})
+        total_timesteps = rl_cfg.get('total_timesteps', 50000)
+        
+        train_df = feature_datasets['train']
+        train_preds = predictions_dict['train']
+        
+        for c_id in range(num_clusters):
+            print(f"\n---> Initializing RL Pipeline for Cluster {c_id}")
+            
+            # Isolate Data for this specific cluster
+            c_train_df = train_df[train_df['cluster_id'] == c_id].copy()
+            c_test_df = test_df[test_df['cluster_id'] == c_id].copy()
+            
+            c_train_preds = train_preds[train_preds['ticker'].isin(c_train_df['ticker'])]
+            c_test_preds = test_preds[test_preds['ticker'].isin(c_test_df['ticker'])]
+            
+            # 1. TRAINING PHASE (Train Split)
+            train_env = MultiAssetTradingEnv(df=c_train_df, predictions_df=c_train_preds, config=self.config)
+            
+            print(f"[*] Training PPO Agent {c_id} for {total_timesteps} timesteps...")
+            model = PPO(
+                policy=rl_cfg.get('policy', "MlpPolicy"),
+                env=train_env,
+                learning_rate=rl_cfg.get('learning_rate', 0.0003),
+                n_steps=rl_cfg.get('n_steps', 2048),
+                batch_size=rl_cfg.get('batch_size', 64),
+                n_epochs=rl_cfg.get('n_epochs', 10),
+                gamma=rl_cfg.get('gamma', 0.99),
+                gae_lambda=rl_cfg.get('gae_lambda', 0.95),
+                ent_coef=rl_cfg.get('ent_coef', 0.01),
+                vf_coef=rl_cfg.get('vf_coef', 0.5),
+                max_grad_norm=rl_cfg.get('max_grad_norm', 0.5),
+                verbose=0,
+                device='cuda' if torch.cuda.is_available() else 'cpu'
+            )
+            
+            model.learn(total_timesteps=total_timesteps)
+            
+            # Save the dedicated cluster agent
+            agent_path = os.path.join(rl_models_dir, f"cluster_{c_id}_ppo")
+            model.save(agent_path)
+            print(f"  -> Agent saved to {agent_path}.zip")
+            
+            # 2. EVALUATION PHASE (Test Split)
+            print(f"[*] Running Out-Of-Sample Test Backtests for Cluster {c_id}...")
+            c_test_env = MultiAssetTradingEnv(df=c_test_df, predictions_df=c_test_preds, config=self.config)
+            
+            # Run Baseline (Equal-Weight) on this specific cluster
+            c_eq_returns = self._run_equal_weight_strategy(c_test_env)
+            
+            # Run PPO Agent
+            c_ppo_returns = self._run_ppo_agent(c_test_env, model)
+            
+            # Plot Results
+            plt.figure(figsize=(12, 6))
+            plt.plot(c_eq_returns, label="Equal-Weight Baseline", color="black", linestyle="--")
+            plt.plot(c_ppo_returns, label="PPO Agent", color="green", linewidth=2)
+            plt.title(f"Cluster {c_id} Portfolio Value (Test Set Out-Of-Sample)")
+            plt.xlabel("Trading Days")
+            plt.ylabel("Portfolio Value ($)")
+            plt.legend()
+            plt.grid(True, alpha=0.3)
+            plt.tight_layout()
+            
+            plot_path = os.path.join(output_dir, f"Cluster_{c_id}_PPO_vs_Baseline.png")
+            plt.savefig(plot_path)
+            plt.close()
+            
+            print(f"  -> Plot saved to {plot_path}")
+
+        print(f"\n[*] ALL STAGES COMPLETE. Final results and agents are saved!")
         return feature_datasets
     
     # ---------------------------------------------------------
@@ -407,6 +487,20 @@ class TradingPipeline:
             else:
                 action = np.zeros(num_assets, dtype=np.float32)
                 
+            obs, reward, terminated, truncated, info = env.step(action)
+            values.append(info['portfolio_value'])
+            done = terminated or truncated
+        return values
+    
+    def _run_ppo_agent(self, env, model):
+        obs, info = env.reset()
+        done = False
+        
+        values = [env.initial_cash]
+        while not done:
+            # deterministic=True forces the agent to take the most probable action (no exploration noise during testing)
+            action, _states = model.predict(obs, deterministic=True) 
+            
             obs, reward, terminated, truncated, info = env.step(action)
             values.append(info['portfolio_value'])
             done = terminated or truncated
