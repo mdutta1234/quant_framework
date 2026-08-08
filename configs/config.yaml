@@ -136,7 +136,7 @@ predictor:
   cnn_channels: 32
   cnn_kernel: 3
   mlp_hidden: [64, 32]
-  epochs: 55
+  epochs: 20
   learning_rate: 0.001
   batch_size: 64
 
